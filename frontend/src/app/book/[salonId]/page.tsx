@@ -3,6 +3,7 @@
 import Link from "next/link";
 import CustomerNavbar from "@/components/layout/CustomerNavbar";
 import Footer from "@/components/layout/Footer";
+import { createBooking } from "@/lib/api/bookings";
 import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
@@ -120,6 +121,9 @@ export default function BookingPage() {
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [isConfirmed, setIsConfirmed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [createdBookingId, setCreatedBookingId] = useState("");
 
   const selectedService = services.find(
     (service) => service.id === selectedServiceId
@@ -151,9 +155,39 @@ export default function BookingPage() {
     }
   }
 
-  function confirmBooking() {
-    if (canContinue) {
+  async function confirmBooking() {
+    if (!canContinue || !selectedService || !selectedStylist || !selectedDate) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError("");
+
+    try {
+      const result = await createBooking({
+        salon_id: salonId,
+        customer_name: customerName.trim(),
+        customer_email: customerEmail.trim(),
+        service_id: selectedService.id,
+        service_name: selectedService.name,
+        stylist_id: selectedStylist.id,
+        stylist_name: selectedStylist.name,
+        appointment_date: selectedDate.id,
+        appointment_time: selectedTime,
+        duration_minutes: Number.parseInt(selectedService.duration, 10),
+        amount: selectedService.price,
+      });
+
+      setCreatedBookingId(result.id);
       setIsConfirmed(true);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Unable to create the booking right now. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -186,6 +220,9 @@ export default function BookingPage() {
               </p>
 
               <div className="mt-4 space-y-3 text-[#2b1b25]">
+                <p>
+                  <span className="font-semibold">Booking ID:</span> {createdBookingId}
+                </p>
                 <p>
                   <span className="font-semibold">Salon:</span> {salonName}
                 </p>
@@ -445,13 +482,19 @@ export default function BookingPage() {
                 <button
                   type="button"
                   onClick={confirmBooking}
-                  disabled={!canContinue}
+                  disabled={!canContinue || isSubmitting}
                   className="rounded-full bg-[#d84b87] px-6 py-3 font-semibold text-white transition hover:bg-[#bf356e] disabled:cursor-not-allowed disabled:bg-[#e9c4d6]"
                 >
-                  Confirm booking
+                  {isSubmitting ? "Submitting..." : "Confirm booking"}
                 </button>
               )}
             </div>
+
+            {submitError && (
+              <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {submitError}
+              </div>
+            )}
           </div>
         </div>
       </main>
