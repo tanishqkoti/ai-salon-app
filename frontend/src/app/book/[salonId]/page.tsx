@@ -3,9 +3,14 @@
 import Link from "next/link";
 import CustomerNavbar from "@/components/layout/CustomerNavbar";
 import Footer from "@/components/layout/Footer";
-import { createBooking } from "@/lib/api/bookings";
+import {
+  createBooking,
+  getSalonAvailability,
+  getStylistAvailability,
+  type AvailabilitySlot,
+} from "@/lib/api/bookings";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const salonNames: Record<string, string> = {
   "aura-studio": "Aura Studio",
@@ -68,22 +73,6 @@ const stylists = [
   },
 ];
 
-const timeSlots = [
-  "10:00 AM",
-  "10:30 AM",
-  "11:00 AM",
-  "11:30 AM",
-  "12:00 PM",
-  "2:00 PM",
-  "2:30 PM",
-  "3:00 PM",
-  "3:30 PM",
-  "4:00 PM",
-  "5:00 PM",
-  "5:30 PM",
-  "6:00 PM",
-];
-
 function getNextSevenDays() {
   const days: Array<{
     id: string;
@@ -118,12 +107,19 @@ export default function BookingPage() {
   const [selectedStylistId, setSelectedStylistId] = useState("");
   const [selectedDateId, setSelectedDateId] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
+  const [availableTimes, setAvailableTimes] = useState<AvailabilitySlot[]>([]);
+  const [isAvailabilityLoading, setIsAvailabilityLoading] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerNotes, setCustomerNotes] = useState("");
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [createdBookingId, setCreatedBookingId] = useState("");
+  const [anyStylistMode, setAnyStylistMode] = useState(false);
+  const [availabilityRefresh, setAvailabilityRefresh] = useState(0);
 
   const selectedService = services.find(
     (service) => service.id === selectedServiceId
@@ -137,11 +133,103 @@ export default function BookingPage() {
     (date) => date.id === selectedDateId
   );
 
+  const selectedDuration = selectedService
+    ? Number.parseInt(selectedService.duration, 10)
+    : 0;
+
+  useEffect(() => {
+    if (!selectedService || !selectedDate || !selectedDuration) {
+      return;
+    }
+
+    const loadAvailability = async () => {
+      setIsAvailabilityLoading(true);
+      setAvailabilityError("");
+
+      try {
+        const response = anyStylistMode
+          ? await getSalonAvailability({
+              salon_id: salonId,
+              date: selectedDate.id,
+              duration_minutes: selectedDuration,
+            })
+          : selectedStylistId
+            ? await getStylistAvailability(selectedStylistId, {
+                salon_id: salonId,
+                date: selectedDate.id,
+                duration_minutes: selectedDuration,
+              })
+            : { salon_id: salonId, date: selectedDate.id, duration_minutes: selectedDuration, available_slots: [] };
+
+        setAvailableTimes(response.available_slots ?? []);
+
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "Unable to load available times.";
+        setAvailabilityError(message);
+        setAvailableTimes([]);
+        setSelectedTime("");
+      } finally {
+        setIsAvailabilityLoading(false);
+      }
+    };
+
+    void loadAvailability();
+  }, [anyStylistMode, availabilityRefresh, selectedDate, selectedDuration, selectedService, selectedStylistId, salonId]);
+
+  const selectedTimeSlot = availableTimes.find((slot) => slot.time === selectedTime);
+
+  const selectedEffectiveStylist = anyStylistMode
+    ? stylists.find((stylist) => stylist.id === selectedTimeSlot?.stylists[0]?.id)
+    : selectedStylist;
+
+  const hasSelectedValidTime = Boolean(
+    selectedDateId && selectedTime && selectedTimeSlot && selectedTimeSlot.stylists.length > 0
+  );
+
+  const bookingReady = Boolean(
+    selectedService &&
+      selectedDateId &&
+      selectedTime &&
+      selectedTimeSlot &&
+      selectedTimeSlot.stylists.length > 0 &&
+      customerName.trim() &&
+      customerEmail.trim()
+  );
+
   const canContinue =
     (step === 1 && selectedServiceId) ||
-    (step === 2 && selectedStylistId) ||
-    (step === 3 && selectedDateId && selectedTime) ||
-    (step === 4 && customerName.trim() && customerEmail.trim());
+    (step === 2 && (selectedStylistId || anyStylistMode)) ||
+    (step === 3 && hasSelectedValidTime) ||
+    (step === 4 && bookingReady);
+
+  function handleAnyStylistToggle() {
+    setAnyStylistMode((current) => !current);
+    setSelectedStylistId("");
+    setSelectedTime("");
+  }
+
+  function handleTimeSelection(time: string) {
+    if (!time || !selectedDateId || !selectedService) {
+      return;
+    }
+
+    const slot = availableTimes.find((availableSlot) => availableSlot.time === time);
+    if (!slot || slot.stylists.length === 0) {
+      setSelectedTime("");
+      return;
+    }
+
+    setSelectedTime(time);
+    if (anyStylistMode) {
+      const firstEligibleStylist = slot.stylists[0]?.id;
+      if (firstEligibleStylist) {
+        setSelectedStylistId(firstEligibleStylist);
+      }
+    }
+  }
 
   function goNext() {
     if (canContinue && step < 4) {
@@ -156,7 +244,19 @@ export default function BookingPage() {
   }
 
   async function confirmBooking() {
-    if (!canContinue || !selectedService || !selectedStylist || !selectedDate) {
+    if (!bookingReady || !selectedService || !selectedDate) {
+      return;
+    }
+
+    const effectiveSelectedStylist =
+      anyStylistMode && selectedTimeSlot && selectedTimeSlot.stylists.length > 0
+        ? stylists.find(
+            (stylist) => stylist.id === selectedTimeSlot.stylists[0]?.id
+          )
+        : selectedStylist;
+
+    if (!effectiveSelectedStylist) {
+      setSubmitError("Please choose a valid stylist before confirming the booking.");
       return;
     }
 
@@ -168,30 +268,46 @@ export default function BookingPage() {
         salon_id: salonId,
         customer_name: customerName.trim(),
         customer_email: customerEmail.trim(),
+        customer_phone: customerPhone.trim() || undefined,
+        notes: customerNotes.trim() || undefined,
         service_id: selectedService.id,
         service_name: selectedService.name,
-        stylist_id: selectedStylist.id,
-        stylist_name: selectedStylist.name,
+        stylist_id: effectiveSelectedStylist.id,
+        stylist_name: effectiveSelectedStylist.name,
         appointment_date: selectedDate.id,
         appointment_time: selectedTime,
-        duration_minutes: Number.parseInt(selectedService.duration, 10),
+        duration_minutes: selectedDuration,
         amount: selectedService.price,
       });
 
       setCreatedBookingId(result.id);
       setIsConfirmed(true);
     } catch (error) {
-      setSubmitError(
-        error instanceof Error
+      const errorText =
+        error instanceof Error && error.message
           ? error.message
-          : "Unable to create the booking right now. Please try again."
-      );
+          : "Unable to create the booking right now. Please try again.";
+
+      const detail =
+        error && typeof error === "object" && "detail" in error
+          ? (error as { detail?: { error?: string; message?: string } }).detail
+          : null;
+
+      if (detail?.error === "slot_unavailable") {
+        setSubmitError("This slot was just booked. Please select another available time.");
+        setSelectedTime("");
+        setAvailabilityRefresh((current) => current + 1);
+        setStep(3);
+        return;
+      }
+
+      setSubmitError(errorText);
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  if (isConfirmed && selectedService && selectedStylist && selectedDate) {
+  if (isConfirmed && selectedService && selectedDate) {
     return (
       <>
         <CustomerNavbar />
@@ -232,7 +348,7 @@ export default function BookingPage() {
                 </p>
                 <p>
                   <span className="font-semibold">Stylist:</span>{" "}
-                  {selectedStylist.name}
+                  {selectedEffectiveStylist?.name ?? "Any available stylist"}
                 </p>
                 <p>
                   <span className="font-semibold">Date:</span>{" "}
@@ -348,12 +464,35 @@ export default function BookingPage() {
                   Pick a preferred stylist or choose any available specialist.
                 </p>
 
+                <div className="mt-6 rounded-2xl border border-[#f0dce5] bg-[#fff0f6] p-4">
+                  <button
+                    type="button"
+                    onClick={handleAnyStylistToggle}
+                    className={`w-full rounded-xl border px-4 py-3 text-left transition ${
+                      anyStylistMode
+                        ? "border-[#d84b87] bg-white text-[#d84b87]"
+                        : "border-[#f0dce5] bg-white text-[#2b1b25]"
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold uppercase tracking-[0.18em] text-[#d84b87]">
+                      Any stylist
+                    </span>
+                    <span className="mt-1 block text-base font-medium">
+                      Let the salon choose the next available eligible stylist.
+                    </span>
+                  </button>
+                </div>
+
                 <div className="mt-6 grid gap-4 md:grid-cols-3">
                   {stylists.map((stylist) => (
                     <button
                       key={stylist.id}
                       type="button"
-                      onClick={() => setSelectedStylistId(stylist.id)}
+                      onClick={() => {
+                        setAnyStylistMode(false);
+                        setSelectedStylistId(stylist.id);
+                        setSelectedTime("");
+                      }}
                       className={`rounded-2xl border p-5 text-left transition ${
                         selectedStylistId === stylist.id
                           ? "border-[#d84b87] bg-[#fff0f6]"
@@ -377,7 +516,7 @@ export default function BookingPage() {
               <section className="mt-10">
                 <h2 className="text-2xl font-bold">Choose date and time</h2>
                 <p className="mt-2 text-[#6d5863]">
-                  Select a slot available with your chosen stylist.
+                  Select a real slot available with your chosen stylist or any eligible stylist.
                 </p>
 
                 <div className="mt-6 space-y-6">
@@ -386,7 +525,10 @@ export default function BookingPage() {
                       <button
                         key={date.id}
                         type="button"
-                        onClick={() => setSelectedDateId(date.id)}
+                        onClick={() => {
+                          setSelectedDateId(date.id);
+                          setSelectedTime("");
+                        }}
                         className={`rounded-2xl border p-4 text-left transition ${
                           selectedDateId === date.id
                             ? "border-[#d84b87] bg-[#fff0f6]"
@@ -406,22 +548,37 @@ export default function BookingPage() {
                     <p className="mb-3 text-sm font-semibold uppercase tracking-[0.18em] text-[#d84b87]">
                       Available times
                     </p>
-                    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                      {timeSlots.map((time) => (
-                        <button
-                          key={time}
-                          type="button"
-                          onClick={() => setSelectedTime(time)}
-                          className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                            selectedTime === time
-                              ? "border-[#d84b87] bg-[#fff0f6] text-[#d84b87]"
-                              : "border-[#f0dce5] bg-white text-[#2b1b25] hover:border-[#e9bfd0]"
-                          }`}
-                        >
-                          {time}
-                        </button>
-                      ))}
-                    </div>
+
+                    {isAvailabilityLoading ? (
+                      <div className="rounded-2xl border border-[#f0dce5] bg-[#fff9fb] px-4 py-6 text-sm text-[#6d5863]">
+                        Loading available times...
+                      </div>
+                    ) : availableTimes.length > 0 ? (
+                      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                        {availableTimes.map((slot) => (
+                          <button
+                            key={slot.time}
+                            type="button"
+                            onClick={() => handleTimeSelection(slot.time)}
+                            className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                              selectedTime === slot.time
+                                ? "border-[#d84b87] bg-[#fff0f6] text-[#d84b87]"
+                                : "border-[#f0dce5] bg-white text-[#2b1b25] hover:border-[#e9bfd0]"
+                            }`}
+                          >
+                            {slot.time}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-[#f0dce5] bg-[#fff9fb] px-4 py-6 text-sm text-[#6d5863]">
+                        No available times for this day. Please try another date or stylist.
+                      </div>
+                    )}
+
+                    {availabilityError ? (
+                      <p className="mt-3 text-sm text-rose-600">{availabilityError}</p>
+                    ) : null}
                   </div>
                 </div>
               </section>
@@ -438,6 +595,7 @@ export default function BookingPage() {
                   <label className="block text-sm font-semibold text-[#2b1b25]">
                     Full name
                     <input
+                      aria-label="Full name"
                       value={customerName}
                       onChange={(event) => setCustomerName(event.target.value)}
                       className="mt-2 w-full rounded-xl border border-[#e9d4df] px-4 py-3 text-base outline-none transition focus:border-[#d84b87] focus:ring-2 focus:ring-[#f8c2d8]"
@@ -448,6 +606,7 @@ export default function BookingPage() {
                   <label className="block text-sm font-semibold text-[#2b1b25]">
                     Email address
                     <input
+                      aria-label="Email address"
                       type="email"
                       value={customerEmail}
                       onChange={(event) => setCustomerEmail(event.target.value)}
@@ -455,6 +614,31 @@ export default function BookingPage() {
                       placeholder="you@example.com"
                     />
                   </label>
+
+                  <label className="block text-sm font-semibold text-[#2b1b25]">
+                    Phone number
+                    <input
+                      aria-label="Phone number"
+                      type="tel"
+                      value={customerPhone}
+                      onChange={(event) => setCustomerPhone(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-[#e9d4df] px-4 py-3 text-base outline-none transition focus:border-[#d84b87] focus:ring-2 focus:ring-[#f8c2d8]"
+                      placeholder="Optional"
+                    />
+                  </label>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-semibold text-[#2b1b25]">
+                      Notes for the salon
+                      <textarea
+                        aria-label="Notes for the salon"
+                        value={customerNotes}
+                        onChange={(event) => setCustomerNotes(event.target.value)}
+                        className="mt-2 min-h-28 w-full rounded-xl border border-[#e9d4df] px-4 py-3 text-base outline-none transition focus:border-[#d84b87] focus:ring-2 focus:ring-[#f8c2d8]"
+                        placeholder="Optional: preferences, allergies, or access needs"
+                      />
+                    </label>
+                  </div>
                 </div>
               </section>
             )}
@@ -482,7 +666,7 @@ export default function BookingPage() {
                 <button
                   type="button"
                   onClick={confirmBooking}
-                  disabled={!canContinue || isSubmitting}
+                  disabled={!bookingReady || isSubmitting}
                   className="rounded-full bg-[#d84b87] px-6 py-3 font-semibold text-white transition hover:bg-[#bf356e] disabled:cursor-not-allowed disabled:bg-[#e9c4d6]"
                 >
                   {isSubmitting ? "Submitting..." : "Confirm booking"}
