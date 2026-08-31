@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+import types
 from datetime import date
 
 import pytest
@@ -12,8 +14,9 @@ import auth
 os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
 from fastapi import HTTPException
 
-from routes import bookings
-from stylist_schedule import is_slot_available
+if "firebase_config" not in sys.modules:
+    fake_firebase_config = types.ModuleType("firebase_config")
+    sys.modules["firebase_config"] = fake_firebase_config
 
 
 class FakeDoc:
@@ -124,6 +127,12 @@ class FakeDB:
         return self.collections[name]
 
 
+sys.modules["firebase_config"].db = FakeDB()
+
+from routes import bookings
+from stylist_schedule import is_slot_available
+
+bookings.db = sys.modules["firebase_config"].db
 bookings.firestore.transactional = fake_transactional
 
 
@@ -298,6 +307,7 @@ def test_cors_parsing_rejects_wildcard_default(monkeypatch):
 def test_firebase_config_has_no_service_account_json_fallback():
     import importlib
 
+    sys.modules.pop("firebase_config", None)
     import firebase_config
 
     importlib.reload(firebase_config)
