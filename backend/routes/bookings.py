@@ -41,6 +41,8 @@ class BookingCreateRequest(BaseModel):
     salon_id: str = Field(..., min_length=1)
     customer_name: str = Field(..., min_length=1)
     customer_email: str = Field(..., min_length=1)
+    customer_phone: str | None = Field(default=None, min_length=1)
+    notes: str | None = Field(default=None, min_length=1)
     service_id: str = Field(..., min_length=1)
     service_name: str = Field(..., min_length=1)
     stylist_id: str = Field(..., min_length=1)
@@ -117,6 +119,8 @@ class BookingResponse(BaseModel):
     salon_id: str
     customer_name: str
     customer_email: str
+    customer_phone: str | None = None
+    notes: str | None = None
     service_id: str
     service_name: str
     stylist_id: str
@@ -143,6 +147,21 @@ def _to_frontend_booking(doc_id: str, payload: dict):
     for key, value in payload.items():
         frontend_payload[key] = _serialize_firestore_value(value)
     return BookingResponse(**frontend_payload)
+
+
+def _build_conflict_response_detail(exc: BookingUnavailableError, payload: BookingCreateRequest):
+    detail = {
+        "error": "slot_unavailable",
+        "message": str(exc) or "This time slot is no longer available. Please choose another time.",
+        "reason": getattr(exc, "reason", "overlap"),
+        "stylist_id": payload.stylist_id,
+        "appointment_date": payload.appointment_date,
+        "appointment_time": payload.appointment_time,
+    }
+    conflict_range = getattr(exc, "conflict_range", None)
+    if conflict_range:
+        detail["conflict_range"] = conflict_range
+    return detail
 
 
 # TODO: Add transactional double-booking prevention before production use.
@@ -292,6 +311,8 @@ def _create_booking_transaction(transaction, payload: BookingCreateRequest):
         "salon_id": payload.salon_id,
         "customer_name": payload.customer_name,
         "customer_email": payload.customer_email,
+        "customer_phone": payload.customer_phone,
+        "notes": payload.notes,
         "service_id": payload.service_id,
         "service_name": payload.service_name,
         "stylist_id": payload.stylist_id,
@@ -319,7 +340,10 @@ async def create_booking(payload: BookingCreateRequest):
     try:
         booking_id = _create_booking_transaction(transaction, payload)
     except BookingUnavailableError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail=_build_conflict_response_detail(exc, payload),
+        ) from exc
     except Exception as exc:  # pragma: no cover - real Firestore issue
         raise HTTPException(status_code=500, detail=f"Unable to save booking: {exc}") from exc
 
@@ -328,6 +352,58 @@ async def create_booking(payload: BookingCreateRequest):
     returned_booking = _to_frontend_booking(booking_id, saved_booking)
 
     return {"id": booking_id, "booking": returned_booking.model_dump()}
+
+
+@router.get("/availability", response_model=dict)
+async def salon_availability(
+    salon_id: str = Query(..., description="Salon ID to inspect availability for."),
+    date: str = Query(..., description="Requested appointment date in YYYY-MM-DD format."),
+    duration_minutes: int = Query(..., gt=0, description="Requested service duration in minutes."),
+):
+    try:
+        date_cls.fromisoformat(date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="date must be in YYYY-MM-DD format.") from exc
+
+    schedule_docs = list(
+        db.collection("stylist_schedule")
+        .where("salon_id", "==", salon_id)
+        .stream()
+    )
+    stylist_ids = []
+    for schedule_doc in schedule_docs:
+        schedule_data = schedule_doc.to_dict() or {}
+        stylist_id = schedule_data.get("stylist_id")
+        if stylist_id and stylist_id not in stylist_ids:
+            stylist_ids.append(stylist_id)
+
+    slot_map: dict[str, list[str]] = {}
+    for stylist_id in stylist_ids:
+        available_slots = get_available_slots_for_day(
+            db,
+            salon_id,
+            stylist_id,
+            date,
+            duration_minutes,
+            buffer_minutes=DEFAULT_BUFFER_MINUTES,
+        )
+        for slot_time in available_slots:
+            slot_map.setdefault(slot_time, []).append(stylist_id)
+
+    available_slots = [
+        {
+            "time": slot_time,
+            "stylists": [{"id": stylist_id} for stylist_id in sorted(slot_map[slot_time])],
+        }
+        for slot_time in sorted(slot_map.keys(), key=lambda value: parse_time_value(value))
+    ]
+
+    return {
+        "salon_id": salon_id,
+        "date": date,
+        "duration_minutes": duration_minutes,
+        "available_slots": available_slots,
+    }
 
 
 @router.get("/", response_model=dict, dependencies=[Depends(verify_api_key)])

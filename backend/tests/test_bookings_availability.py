@@ -72,6 +72,8 @@ class FakeQuery:
 class FakeTransaction:
     def __init__(self):
         self._writes = []
+        self._read_only = False
+        self._max_attempts = 3
 
     def get(self, query):
         return query.stream()
@@ -84,6 +86,12 @@ class FakeTransaction:
         self._writes.append((ref, data.copy()))
         current = ref.collection.records.setdefault(ref.id, {})
         current.update(data)
+
+    def _commit(self):
+        return None
+
+    def _rollback(self):
+        return None
 
 
 def fake_transactional(func):
@@ -376,15 +384,305 @@ def test_create_booking_is_public_without_api_key(fake_db):
         bookings._create_booking_transaction = original_transaction
 
 
-def test_unauthenticated_bookings_list_is_rejected():
+def test_create_booking_accepts_optional_phone_and_notes(fake_db):
+    original_db = bookings.db
+    original_transaction = bookings._create_booking_transaction
+
+    def fake_transactional_booking(transaction, payload):
+        request_start = bookings.validate_appointment_datetime(
+            payload.appointment_date,
+            payload.appointment_time,
+        )
+        request_end = request_start + bookings.timedelta(minutes=payload.duration_minutes)
+        padded_start = request_start - bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+        padded_end = request_end + bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+
+        for booking_doc in fake_db.collection("bookings").stream():
+            booking_data = booking_doc.to_dict() or {}
+            if booking_data.get("status") in bookings.CONFLICT_STATUSES:
+                continue
+            existing_start = bookings.parse_booking_datetime(
+                booking_data.get("appointment_date", payload.appointment_date),
+                booking_data.get("appointment_time", payload.appointment_time),
+            )
+            existing_end = existing_start + bookings.timedelta(
+                minutes=int(booking_data.get("duration_minutes", 0) or 0)
+            )
+            if padded_start < existing_end and existing_start < padded_end:
+                raise bookings.BookingUnavailableError(
+                    "overlap",
+                    bookings.format_time_range(existing_start, existing_end),
+                )
+
+        booking_ref = fake_db.collection("bookings").document()
+        booking_data = {
+            "salon_id": payload.salon_id,
+            "customer_name": payload.customer_name,
+            "customer_email": payload.customer_email,
+            "customer_phone": payload.customer_phone,
+            "notes": payload.notes,
+            "service_id": payload.service_id,
+            "service_name": payload.service_name,
+            "stylist_id": payload.stylist_id,
+            "stylist_name": payload.stylist_name,
+            "appointment_date": payload.appointment_date,
+            "appointment_time": payload.appointment_time,
+            "duration_minutes": payload.duration_minutes,
+            "amount": payload.amount,
+            "status": "Pending",
+        }
+        booking_ref.set(booking_data)
+        return booking_ref.id
+
+    bookings.db = fake_db
+    bookings._create_booking_transaction = fake_transactional_booking
+    try:
+        payload = booking_payload(
+            customer_phone="+91 98765 43210",
+            notes="Prefers morning slot and sensitive scalp.",
+        )
+        result = asyncio.run(bookings.create_booking(payload))
+        assert result["booking"]["customer_phone"] == "+91 98765 43210"
+        assert result["booking"]["notes"] == "Prefers morning slot and sensitive scalp."
+    finally:
+        bookings.db = original_db
+        bookings._create_booking_transaction = original_transaction
+
+
+def test_create_booking_accepts_legacy_payload_without_optional_fields(fake_db):
+    original_db = bookings.db
+    original_transaction = bookings._create_booking_transaction
+
+    def fake_transactional_booking(transaction, payload):
+        request_start = bookings.validate_appointment_datetime(
+            payload.appointment_date,
+            payload.appointment_time,
+        )
+        request_end = request_start + bookings.timedelta(minutes=payload.duration_minutes)
+        padded_start = request_start - bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+        padded_end = request_end + bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+
+        for booking_doc in fake_db.collection("bookings").stream():
+            booking_data = booking_doc.to_dict() or {}
+            if booking_data.get("status") in bookings.CONFLICT_STATUSES:
+                continue
+            existing_start = bookings.parse_booking_datetime(
+                booking_data.get("appointment_date", payload.appointment_date),
+                booking_data.get("appointment_time", payload.appointment_time),
+            )
+            existing_end = existing_start + bookings.timedelta(
+                minutes=int(booking_data.get("duration_minutes", 0) or 0)
+            )
+            if padded_start < existing_end and existing_start < padded_end:
+                raise bookings.BookingUnavailableError(
+                    "overlap",
+                    bookings.format_time_range(existing_start, existing_end),
+                )
+
+        booking_ref = fake_db.collection("bookings").document()
+        booking_data = {
+            "salon_id": payload.salon_id,
+            "customer_name": payload.customer_name,
+            "customer_email": payload.customer_email,
+            "customer_phone": payload.customer_phone,
+            "notes": payload.notes,
+            "service_id": payload.service_id,
+            "service_name": payload.service_name,
+            "stylist_id": payload.stylist_id,
+            "stylist_name": payload.stylist_name,
+            "appointment_date": payload.appointment_date,
+            "appointment_time": payload.appointment_time,
+            "duration_minutes": payload.duration_minutes,
+            "amount": payload.amount,
+            "status": "Pending",
+        }
+        booking_ref.set(booking_data)
+        return booking_ref.id
+
+    bookings.db = fake_db
+    bookings._create_booking_transaction = fake_transactional_booking
+    try:
+        payload = booking_payload()
+        result = asyncio.run(bookings.create_booking(payload))
+        assert result["booking"]["customer_phone"] is None
+        assert result["booking"]["notes"] is None
+    finally:
+        bookings.db = original_db
+        bookings._create_booking_transaction = original_transaction
+
+
+def test_create_booking_rejects_unrelated_extra_fields():
+    with pytest.raises(ValidationError):
+        bookings.BookingCreateRequest(
+            salon_id="aura-studio",
+            customer_name="Alice Tester",
+            customer_email="alice@example.com",
+            service_id="hair-spa",
+            service_name="Hair Spa",
+            stylist_id="ananya",
+            stylist_name="Ananya",
+            appointment_date="2030-01-15",
+            appointment_time="10:30 AM",
+            duration_minutes=60,
+            amount=999,
+            unexpected_field="nope",
+        )
+
+
+def test_salon_availability_returns_time_slots_with_eligible_stylists(fake_db):
+    original_db = bookings.db
+    bookings.db = fake_db
+    try:
+        fake_db.collection("stylist_schedule").records["schedule-1"] = {
+            "salon_id": "aura-studio",
+            "stylist_id": "ananya",
+            "kind": "placeholder",
+        }
+        fake_db.collection("stylist_schedule").records["schedule-2"] = {
+            "salon_id": "aura-studio",
+            "stylist_id": "rahul",
+            "kind": "placeholder",
+        }
+
+        result = asyncio.run(
+            bookings.salon_availability(
+                salon_id="aura-studio",
+                date="2030-01-15",
+                duration_minutes=60,
+            )
+        )
+        assert result["salon_id"] == "aura-studio"
+        assert result["date"] == "2030-01-15"
+        assert any(slot["time"] == "10:00 AM" for slot in result["available_slots"])
+        assert any(
+            {stylist["id"] for stylist in slot["stylists"]} == {"ananya", "rahul"}
+            for slot in result["available_slots"]
+        )
+    finally:
+        bookings.db = original_db
+
+
+def test_salon_availability_respects_existing_booking_conflicts(fake_db):
+    original_db = bookings.db
+    bookings.db = fake_db
+    try:
+        fake_db.collection("stylist_schedule").records["schedule-1"] = {
+            "salon_id": "aura-studio",
+            "stylist_id": "ananya",
+            "kind": "placeholder",
+        }
+        fake_db.collection("bookings").records["booking-1"] = {
+            "salon_id": "aura-studio",
+            "stylist_id": "ananya",
+            "appointment_date": "2030-01-15",
+            "appointment_time": "10:00 AM",
+            "duration_minutes": 60,
+            "status": "Confirmed",
+        }
+
+        result = asyncio.run(
+            bookings.salon_availability(
+                salon_id="aura-studio",
+                date="2030-01-15",
+                duration_minutes=60,
+            )
+        )
+        assert not any(slot["time"] == "10:00 AM" for slot in result["available_slots"])
+    finally:
+        bookings.db = original_db
+
+
+def test_create_booking_returns_structured_conflict_detail(fake_db):
+    original_db = bookings.db
+    original_transaction = bookings._create_booking_transaction
+
+    def fake_transactional_booking(transaction, payload):
+        request_start = bookings.validate_appointment_datetime(
+            payload.appointment_date,
+            payload.appointment_time,
+        )
+        request_end = request_start + bookings.timedelta(minutes=payload.duration_minutes)
+        padded_start = request_start - bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+        padded_end = request_end + bookings.timedelta(minutes=bookings.DEFAULT_BUFFER_MINUTES)
+
+        for booking_doc in fake_db.collection("bookings").stream():
+            booking_data = booking_doc.to_dict() or {}
+            if booking_data.get("status") in bookings.CONFLICT_STATUSES:
+                continue
+            existing_start = bookings.parse_booking_datetime(
+                booking_data.get("appointment_date", payload.appointment_date),
+                booking_data.get("appointment_time", payload.appointment_time),
+            )
+            existing_end = existing_start + bookings.timedelta(
+                minutes=int(booking_data.get("duration_minutes", 0) or 0)
+            )
+            if padded_start < existing_end and existing_start < padded_end:
+                raise bookings.BookingUnavailableError(
+                    "overlap",
+                    bookings.format_time_range(existing_start, existing_end),
+                )
+
+        raise AssertionError("should have raised conflict before creating the booking")
+
+    bookings.db = fake_db
+    bookings._create_booking_transaction = fake_transactional_booking
+    try:
+        fake_db.collection("bookings").records["booking-1"] = {
+            "salon_id": "aura-studio",
+            "customer_name": "Existing Customer",
+            "customer_email": "existing@example.com",
+            "service_id": "hair-spa",
+            "service_name": "Hair Spa",
+            "stylist_id": "ananya",
+            "stylist_name": "Ananya",
+            "appointment_date": "2030-01-15",
+            "appointment_time": "10:30 AM",
+            "duration_minutes": 60,
+            "amount": 999,
+            "status": "Confirmed",
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                bookings.create_booking(
+                    booking_payload(
+                        appointment_date="2030-01-15",
+                        appointment_time="10:30 AM",
+                    )
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        detail = exc_info.value.detail
+        assert detail["error"] == "slot_unavailable"
+        assert detail["reason"] == "overlap"
+        assert detail["stylist_id"] == "ananya"
+        assert detail["appointment_date"] == "2030-01-15"
+        assert detail["appointment_time"] == "10:30 AM"
+        assert "message" in detail
+        assert "available" in detail["message"].lower()
+    finally:
+        bookings.db = original_db
+        bookings._create_booking_transaction = original_transaction
+
+
+def test_unauthenticated_bookings_list_is_rejected(monkeypatch):
+    monkeypatch.setenv("BACKEND_API_KEY", "test-api-key")
+    import importlib
+    import auth as auth_module
+    importlib.reload(auth_module)
     with pytest.raises(HTTPException) as exc_info:
-        auth.verify_api_key(None)
+        auth_module.verify_api_key(None)
     assert exc_info.value.status_code == 401
 
 
-def test_unauthenticated_status_update_is_rejected():
+def test_unauthenticated_status_update_is_rejected(monkeypatch):
+    monkeypatch.setenv("BACKEND_API_KEY", "test-api-key")
+    import importlib
+    import auth as auth_module
+    importlib.reload(auth_module)
     with pytest.raises(HTTPException) as exc_info:
-        auth.verify_api_key(None)
+        auth_module.verify_api_key(None)
     assert exc_info.value.status_code == 401
 
 
