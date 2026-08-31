@@ -284,6 +284,29 @@ def test_booking_during_recurring_break_should_fail(fake_db):
     ) is False
 
 
+def test_cors_parsing_rejects_wildcard_default(monkeypatch):
+    import importlib
+
+    import main
+
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+    importlib.reload(main)
+    assert main._parse_cors_origins() == []
+    assert "*" not in main._parse_cors_origins()
+
+
+def test_firebase_config_has_no_service_account_json_fallback():
+    import importlib
+
+    import firebase_config
+
+    importlib.reload(firebase_config)
+    file_text = open("firebase_config.py", "r", encoding="utf-8").read()
+    assert "serviceAccountKey.json" not in file_text
+    assert 'os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")' not in file_text
+    assert 'GOOGLE_APPLICATION_CREDENTIALS' in file_text
+
+
 def test_create_booking_is_public_without_api_key(fake_db):
     original_db = bookings.db
     original_transaction = bookings._create_booking_transaction

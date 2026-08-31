@@ -1,16 +1,45 @@
+import json
 import os
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import firestore
 
-service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")
 
-if not os.path.isabs(service_account_path):
-    service_account_path = os.path.join(os.path.dirname(__file__), service_account_path)
+def _initialize_firebase() -> None:
+    if firebase_admin._apps:
+        return
 
-if not firebase_admin._apps:
-    cred = credentials.Certificate(service_account_path)
-    firebase_admin.initialize_app(cred)
+    service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if service_account_path and service_account_path.strip():
+        path = service_account_path.strip()
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
 
-# Firestore client available at import time
+        if not os.path.exists(path):
+            raise RuntimeError(
+                f"GOOGLE_APPLICATION_CREDENTIALS points to a non-existent file: {path}"
+            )
+
+        try:
+            with open(path, "r", encoding="utf-8") as credential_file:
+                config = json.load(credential_file)
+        except (OSError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"Unable to read or parse GOOGLE_APPLICATION_CREDENTIALS file: {path}"
+            ) from exc
+
+        if not isinstance(config, dict) or config.get("type") != "service_account":
+            raise RuntimeError(
+                "GOOGLE_APPLICATION_CREDENTIALS must point to a valid Firebase service account JSON file."
+            )
+
+        from firebase_admin import credentials
+
+        firebase_admin.initialize_app(credentials.Certificate(path))
+        return
+
+    firebase_admin.initialize_app()
+
+
+_initialize_firebase()
 db = firestore.client()

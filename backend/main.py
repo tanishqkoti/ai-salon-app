@@ -1,3 +1,5 @@
+import os
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,13 +18,25 @@ from routes import (
 
 load_dotenv()
 
+
+def _parse_cors_origins() -> list[str]:
+    raw_value = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    origins = []
+    for item in raw_value.split(","):
+        cleaned = item.strip()
+        if cleaned:
+            origins.append(cleaned)
+    return origins
+
+
 app = FastAPI(title="AI Salon & Spa API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_parse_cors_origins(),
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
+    allow_credentials=False,
 )
 
 app.include_router(bookings.router, prefix="/bookings")
