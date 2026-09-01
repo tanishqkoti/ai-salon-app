@@ -49,21 +49,11 @@ export type BookingListResponse = {
   bookings: BookingRecord[];
 };
 
-export type AvailabilityStylist = {
-  id: string;
-  name?: string;
-};
-
-export type AvailabilitySlot = {
-  time: string;
-  stylists: AvailabilityStylist[];
-};
-
 export type AvailabilityResponse = {
   salon_id: string;
   date: string;
   duration_minutes: number;
-  available_slots: AvailabilitySlot[];
+  available_slots: string[];
 };
 
 export type GetAvailabilityParams = {
@@ -73,7 +63,7 @@ export type GetAvailabilityParams = {
 };
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -85,17 +75,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
 
   const responseText = await response.text();
-  const payload = responseText ? JSON.parse(responseText) : null;
+  let payload: unknown = null;
+
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      payload = responseText;
+    }
+  }
 
   if (!response.ok) {
-    const detail = payload?.detail ?? payload?.message ?? "Request failed.";
-    const error = new Error(
-      typeof detail === "string"
+    const responseBody =
+      typeof payload === "object" && payload !== null
+        ? payload as { detail?: unknown; message?: unknown }
+        : null;
+    const detail = responseBody?.detail ?? responseBody?.message;
+    const message = detail
+      ? typeof detail === "string"
         ? detail
-        : typeof detail?.message === "string"
-          ? detail.message
-          : detail?.error || "Request failed."
-    ) as Error & { detail?: unknown };
+        : JSON.stringify(detail)
+      : "Could not create the booking.";
+    const error = new Error(message) as Error & { detail?: unknown };
     error.detail = detail;
     throw error;
   }

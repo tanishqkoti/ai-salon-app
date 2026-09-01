@@ -7,7 +7,6 @@ import {
   createBooking,
   getSalonAvailability,
   getStylistAvailability,
-  type AvailabilitySlot,
 } from "@/lib/api/bookings";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -107,7 +106,7 @@ export default function BookingPage() {
   const [selectedStylistId, setSelectedStylistId] = useState("");
   const [selectedDateId, setSelectedDateId] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
-  const [availableTimes, setAvailableTimes] = useState<AvailabilitySlot[]>([]);
+  const [availableSlots, setAvailableSlots] = useState<string[]>([]);
   const [isAvailabilityLoading, setIsAvailabilityLoading] = useState(false);
   const [availabilityError, setAvailabilityError] = useState("");
   const [customerName, setCustomerName] = useState("");
@@ -147,7 +146,7 @@ export default function BookingPage() {
       setAvailabilityError("");
 
       try {
-        const response = anyStylistMode
+        const data = anyStylistMode
           ? await getSalonAvailability({
               salon_id: salonId,
               date: selectedDate.id,
@@ -161,16 +160,14 @@ export default function BookingPage() {
               })
             : { salon_id: salonId, date: selectedDate.id, duration_minutes: selectedDuration, available_slots: [] };
 
-        setAvailableTimes(response.available_slots ?? []);
-
+        setAvailableSlots(data.available_slots ?? []);
       } catch (error) {
         const message =
           error instanceof Error && error.message
             ? error.message
             : "Unable to load available times.";
         setAvailabilityError(message);
-        setAvailableTimes([]);
-        setSelectedTime("");
+        setAvailableSlots([]);
       } finally {
         setIsAvailabilityLoading(false);
       }
@@ -179,22 +176,17 @@ export default function BookingPage() {
     void loadAvailability();
   }, [anyStylistMode, availabilityRefresh, selectedDate, selectedDuration, selectedService, selectedStylistId, salonId]);
 
-  const selectedTimeSlot = availableTimes.find((slot) => slot.time === selectedTime);
-
-  const selectedEffectiveStylist = anyStylistMode
-    ? stylists.find((stylist) => stylist.id === selectedTimeSlot?.stylists[0]?.id)
-    : selectedStylist;
+  const selectedEffectiveStylist = anyStylistMode ? stylists[0] : selectedStylist;
 
   const hasSelectedValidTime = Boolean(
-    selectedDateId && selectedTime && selectedTimeSlot && selectedTimeSlot.stylists.length > 0
+    selectedDateId && selectedTime && availableSlots.includes(selectedTime)
   );
 
   const bookingReady = Boolean(
     selectedService &&
       selectedDateId &&
       selectedTime &&
-      selectedTimeSlot &&
-      selectedTimeSlot.stylists.length > 0 &&
+      availableSlots.includes(selectedTime) &&
       customerName.trim() &&
       customerEmail.trim()
   );
@@ -216,19 +208,12 @@ export default function BookingPage() {
       return;
     }
 
-    const slot = availableTimes.find((availableSlot) => availableSlot.time === time);
-    if (!slot || slot.stylists.length === 0) {
+    if (!availableSlots.includes(time)) {
       setSelectedTime("");
       return;
     }
 
     setSelectedTime(time);
-    if (anyStylistMode) {
-      const firstEligibleStylist = slot.stylists[0]?.id;
-      if (firstEligibleStylist) {
-        setSelectedStylistId(firstEligibleStylist);
-      }
-    }
   }
 
   function goNext() {
@@ -248,12 +233,7 @@ export default function BookingPage() {
       return;
     }
 
-    const effectiveSelectedStylist =
-      anyStylistMode && selectedTimeSlot && selectedTimeSlot.stylists.length > 0
-        ? stylists.find(
-            (stylist) => stylist.id === selectedTimeSlot.stylists[0]?.id
-          )
-        : selectedStylist;
+    const effectiveSelectedStylist = selectedEffectiveStylist;
 
     if (!effectiveSelectedStylist) {
       setSubmitError("Please choose a valid stylist before confirming the booking.");
@@ -430,7 +410,10 @@ export default function BookingPage() {
                     <button
                       key={service.id}
                       type="button"
-                      onClick={() => setSelectedServiceId(service.id)}
+                      onClick={() => {
+                        setSelectedServiceId(service.id);
+                        setSelectedTime("");
+                      }}
                       className={`rounded-2xl border p-5 text-left transition ${
                         selectedServiceId === service.id
                           ? "border-[#d84b87] bg-[#fff0f6]"
@@ -553,20 +536,20 @@ export default function BookingPage() {
                       <div className="rounded-2xl border border-[#f0dce5] bg-[#fff9fb] px-4 py-6 text-sm text-[#6d5863]">
                         Loading available times...
                       </div>
-                    ) : availableTimes.length > 0 ? (
+                    ) : availableSlots.length > 0 ? (
                       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                        {availableTimes.map((slot) => (
+                        {availableSlots.map((time) => (
                           <button
-                            key={slot.time}
+                            key={time}
                             type="button"
-                            onClick={() => handleTimeSelection(slot.time)}
+                            onClick={() => handleTimeSelection(time)}
                             className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                              selectedTime === slot.time
+                              selectedTime === time
                                 ? "border-[#d84b87] bg-[#fff0f6] text-[#d84b87]"
                                 : "border-[#f0dce5] bg-white text-[#2b1b25] hover:border-[#e9bfd0]"
                             }`}
                           >
-                            {slot.time}
+                            {time}
                           </button>
                         ))}
                       </div>
@@ -657,7 +640,7 @@ export default function BookingPage() {
                 <button
                   type="button"
                   onClick={goNext}
-                  disabled={!canContinue}
+                  disabled={step === 3 ? !selectedDate || !selectedTime : !canContinue}
                   className="rounded-full bg-[#d84b87] px-6 py-3 font-semibold text-white transition hover:bg-[#bf356e] disabled:cursor-not-allowed disabled:bg-[#e9c4d6]"
                 >
                   Continue
