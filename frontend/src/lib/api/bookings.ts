@@ -26,6 +26,7 @@ export type BookingRecord = {
   salon_id: string;
   customer_name: string;
   customer_email: string;
+  customer_phone?: string | null;
   service_id: string;
   service_name: string;
   stylist_id: string;
@@ -144,14 +145,15 @@ export async function getBookingsBySalon(
   salonId: string
 ): Promise<BookingListResponse> {
   const query = new URLSearchParams({ salon_id: salonId });
-  return request<BookingListResponse>(`/bookings/?${query.toString()}`);
+  return request<BookingListResponse>(`/api/salon/bookings?${query.toString()}`);
 }
 
 export async function updateBookingStatus(
   bookingId: string,
   status: BookingStatus
 ): Promise<BookingApiResult> {
-  return request<BookingApiResult>(`/bookings/${bookingId}/status`, {
+  const query = new URLSearchParams({ booking_id: bookingId });
+  return request<BookingApiResult>(`/api/salon/bookings?${query.toString()}`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });

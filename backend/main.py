@@ -14,6 +14,7 @@ from routes import (
     mood,
     tryon,
     reminders,
+    owner_auth,
 )
 
 load_dotenv()
@@ -48,3 +49,4 @@ app.include_router(feedback.router, prefix="/feedback")
 app.include_router(mood.router, prefix="/mood")
 app.include_router(tryon.router, prefix="/tryon")
 app.include_router(reminders.router, prefix="/reminders")
+app.include_router(owner_auth.router, prefix="/auth/owner")

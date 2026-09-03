@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import verify_api_key
+from auth import OwnerAccess, require_owner, verify_api_key
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from firebase_admin import firestore
@@ -407,11 +407,13 @@ async def salon_availability(
 
 
 @router.get("/", response_model=dict, dependencies=[Depends(verify_api_key)])
-async def list_bookings(salon_id: str = Query(..., description="Salon ID to fetch bookings for.")):
-    if not salon_id or not salon_id.strip():
-        raise HTTPException(status_code=400, detail="Query parameter salon_id is required.")
-
-    normalized_salon_id = salon_id.strip()
+async def list_bookings(
+    salon_id: str | None = Query(None, description="Optional salon scope to validate."),
+    owner: OwnerAccess = Depends(require_owner),
+):
+    normalized_salon_id = owner["salon_id"]
+    if salon_id and salon_id.strip() != normalized_salon_id:
+        raise HTTPException(status_code=403, detail="You are not authorized to access this salon.")
 
     try:
         query = db.collection("bookings").where("salon_id", "==", normalized_salon_id)
@@ -469,7 +471,11 @@ async def stylist_availability(
 
 
 @router.patch("/{booking_id}/status", response_model=dict, dependencies=[Depends(verify_api_key)])
-async def update_booking_status(booking_id: str, payload: BookingStatusUpdateRequest):
+async def update_booking_status(
+    booking_id: str,
+    payload: BookingStatusUpdateRequest,
+    owner: OwnerAccess = Depends(require_owner),
+):
     if not booking_id or not booking_id.strip():
         raise HTTPException(status_code=400, detail="booking_id is required.")
 
@@ -477,6 +483,10 @@ async def update_booking_status(booking_id: str, payload: BookingStatusUpdateReq
     booking_snapshot = booking_ref.get()
     if not booking_snapshot.exists:
         raise HTTPException(status_code=404, detail="Booking not found.")
+
+    booking_data = booking_snapshot.to_dict() or {}
+    if booking_data.get("salon_id") != owner["salon_id"]:
+        raise HTTPException(status_code=403, detail="You are not authorized to update this booking.")
 
     if payload.status not in VALID_BOOKING_STATUSES:
         raise HTTPException(

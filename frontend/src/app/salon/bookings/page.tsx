@@ -32,8 +32,13 @@ const statusOptions: BookingStatus[] = [
 export default function SalonBookingsPage() {
   const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [updatingBookingId, setUpdatingBookingId] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"All" | BookingStatus>("All");
+  const [dateFilter, setDateFilter] = useState<"today" | "upcoming" | "all">("today");
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  const today = new Date().toISOString().split("T")[0];
 
   useEffect(() => {
     async function fetchBookings() {
@@ -57,6 +62,18 @@ export default function SalonBookingsPage() {
     fetchBookings();
   }, []);
 
+  const visibleBookings = useMemo(() => {
+    return bookings.filter((booking) => {
+      const matchesStatus = statusFilter === "All" || booking.status === statusFilter;
+      const matchesDate =
+        dateFilter === "all" ||
+        (dateFilter === "today" && booking.appointment_date === today) ||
+        (dateFilter === "upcoming" && booking.appointment_date >= today);
+
+      return matchesStatus && matchesDate;
+    });
+  }, [bookings, dateFilter, statusFilter, today]);
+
   const stats = useMemo(() => {
     return {
       Pending: bookings.filter((booking) => booking.status === "Pending").length,
@@ -67,8 +84,9 @@ export default function SalonBookingsPage() {
   }, [bookings]);
 
   async function handleStatusChange(bookingId: string, nextStatus: BookingStatus) {
-    setIsUpdating(true);
+    setUpdatingBookingId(bookingId);
     setError("");
+    setSuccessMessage("");
 
     try {
       const result = await updateBookingStatus(bookingId, nextStatus);
@@ -77,6 +95,7 @@ export default function SalonBookingsPage() {
           booking.id === bookingId ? result.booking : booking
         )
       );
+      setSuccessMessage(`Booking ${nextStatus.toLowerCase()} successfully.`);
     } catch (updateError) {
       setError(
         updateError instanceof Error
@@ -84,7 +103,7 @@ export default function SalonBookingsPage() {
           : "Unable to update booking status."
       );
     } finally {
-      setIsUpdating(false);
+      setUpdatingBookingId("");
     }
   }
 
@@ -121,9 +140,42 @@ export default function SalonBookingsPage() {
               ))}
             </div>
 
+            <div className="flex flex-col gap-4 rounded-2xl border border-[#f0dce5] bg-white p-5 shadow-sm sm:flex-row sm:items-end">
+              <label className="grid gap-2 text-sm font-semibold">
+                Status
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as "All" | BookingStatus)}
+                  className="rounded-xl border border-[#e9d4df] bg-white px-3 py-2 font-medium outline-none focus:border-[#d84b87]"
+                >
+                  <option value="All">All statuses</option>
+                  {statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold">
+                Date
+                <select
+                  value={dateFilter}
+                  onChange={(event) => setDateFilter(event.target.value as "today" | "upcoming" | "all")}
+                  className="rounded-xl border border-[#e9d4df] bg-white px-3 py-2 font-medium outline-none focus:border-[#d84b87]"
+                >
+                  <option value="today">Today</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="all">All bookings</option>
+                </select>
+              </label>
+            </div>
+
             {error && (
               <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {error}
+              </div>
+            )}
+
+            {successMessage && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                {successMessage}
               </div>
             )}
 
@@ -134,58 +186,67 @@ export default function SalonBookingsPage() {
 
               {isLoading ? (
                 <div className="px-6 py-10 text-sm text-[#6d5863]">Loading bookings...</div>
-              ) : bookings.length === 0 ? (
+              ) : visibleBookings.length === 0 ? (
                 <div className="px-6 py-10 text-sm text-[#6d5863]">
-                  No bookings found for Aura Studio yet.
+                  No bookings match the selected filters.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[820px] text-left">
                     <thead className="bg-[#fff9fb] text-sm text-[#6d5863]">
                       <tr>
+                        <th className="px-6 py-4 font-semibold">Date</th>
+                        <th className="px-6 py-4 font-semibold">Time</th>
                         <th className="px-6 py-4 font-semibold">Customer</th>
+                        <th className="px-6 py-4 font-semibold">Phone</th>
                         <th className="px-6 py-4 font-semibold">Service</th>
                         <th className="px-6 py-4 font-semibold">Stylist</th>
-                        <th className="px-6 py-4 font-semibold">Time</th>
+                        <th className="px-6 py-4 font-semibold">Amount</th>
                         <th className="px-6 py-4 font-semibold">Status</th>
                         <th className="px-6 py-4 font-semibold">Update</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {bookings.map((booking) => (
+                      {visibleBookings.map((booking) => (
                         <tr key={booking.id} className="border-t border-[#f6e8ee] text-sm">
+                          <td className="px-6 py-5 font-medium">{booking.appointment_date}</td>
+                          <td className="px-6 py-5 font-medium">{booking.appointment_time}</td>
                           <td className="px-6 py-5">
                             <p className="font-semibold">{booking.customer_name}</p>
                             <p className="mt-1 text-[#6d5863]">#{booking.id.slice(0, 8)}</p>
                           </td>
+                          <td className="px-6 py-5">{booking.customer_phone || "Not provided"}</td>
                           <td className="px-6 py-5">{booking.service_name}</td>
                           <td className="px-6 py-5">{booking.stylist_name}</td>
-                          <td className="px-6 py-5 font-medium">
-                            {booking.appointment_date} · {booking.appointment_time}
-                          </td>
+                          <td className="px-6 py-5 font-medium">₹{booking.amount.toLocaleString("en-IN")}</td>
                           <td className="px-6 py-5">
                             <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[booking.status]}`}>
                               {booking.status}
                             </span>
                           </td>
                           <td className="px-6 py-5">
-                            <select
-                              value={booking.status}
-                              onChange={(event) =>
-                                handleStatusChange(
-                                  booking.id,
-                                  event.target.value as BookingStatus
-                                )
-                              }
-                              disabled={isUpdating}
-                              className="rounded-xl border border-[#e9d4df] bg-white px-3 py-2 text-sm font-medium text-[#2b1b25] outline-none focus:border-[#d84b87]"
-                            >
-                              {statusOptions.map((status) => (
-                                <option key={status} value={status}>
-                                  {status}
-                                </option>
-                              ))}
-                            </select>
+                            {booking.status === "Pending" ? (
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange(booking.id, "Confirmed")}
+                                  disabled={updatingBookingId === booking.id}
+                                  className="rounded-lg bg-[#d84b87] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#bf356e] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {updatingBookingId === booking.id ? "Updating..." : "Confirm"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange(booking.id, "Cancelled")}
+                                  disabled={updatingBookingId === booking.id}
+                                  className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[#6d5863]">No action</span>
+                            )}
                           </td>
                         </tr>
                       ))}
