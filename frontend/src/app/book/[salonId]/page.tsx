@@ -229,6 +229,10 @@ export default function BookingPage() {
   }
 
   async function confirmBooking() {
+    if (isSubmitting) {
+      return;
+    }
+
     if (!bookingReady || !selectedService || !selectedDate) {
       return;
     }
@@ -240,10 +244,10 @@ export default function BookingPage() {
       return;
     }
 
-    setIsSubmitting(true);
     setSubmitError("");
 
     try {
+      setIsSubmitting(true);
       const result = await createBooking({
         salon_id: salonId,
         customer_name: customerName.trim(),
@@ -652,7 +656,7 @@ export default function BookingPage() {
                   disabled={!bookingReady || isSubmitting}
                   className="rounded-full bg-[#d84b87] px-6 py-3 font-semibold text-white transition hover:bg-[#bf356e] disabled:cursor-not-allowed disabled:bg-[#e9c4d6]"
                 >
-                  {isSubmitting ? "Submitting..." : "Confirm booking"}
+                  {isSubmitting ? "Confirming..." : "Confirm booking"}
                 </button>
               )}
             </div>
