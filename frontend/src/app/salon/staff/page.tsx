@@ -3,12 +3,16 @@
 import Link from "next/link";
 import SalonDashboardHeader from "@/components/layout/SalonDashboardHeader";
 import SalonSidebar from "@/components/layout/SalonSidebar";
-import { useMemo, useState } from "react";
+import CreateStaffControl from "@/components/dashboard/CreateStaffControl";
+import LifecycleAction from "@/components/dashboard/LifecycleAction";
+import { deactivateStaff, getStaff, updateStaff, updateStaffStatus, type StaffApiRecord } from "@/lib/api/staff";
+import { getServices, type ServiceApiRecord } from "@/lib/api/services";
+import { useEffect, useMemo, useState } from "react";
 
 type StaffStatus = "Available" | "Busy" | "On Leave";
 
 type StaffMember = {
-  id: number;
+  id: number | string;
   name: string;
   role: string;
   speciality: string;
@@ -19,6 +23,8 @@ type StaffMember = {
   weeklyHours: string;
   services: string[];
   color: string;
+  isActive: boolean;
+  isDemo: boolean;
 };
 
 const initialStaff: StaffMember[] = [
@@ -34,6 +40,8 @@ const initialStaff: StaffMember[] = [
     weeklyHours: "Mon – Sat",
     services: ["Women’s Haircut", "Hair Spa", "Hair Colour", "Hair Styling"],
     color: "from-pink-300 to-purple-200",
+    isActive: true,
+    isDemo: true,
   },
   {
     id: 2,
@@ -47,6 +55,8 @@ const initialStaff: StaffMember[] = [
     weeklyHours: "Tue – Sun",
     services: ["Men’s Haircut", "Beard Grooming", "Hair Styling"],
     color: "from-blue-200 to-violet-200",
+    isActive: true,
+    isDemo: true,
   },
   {
     id: 3,
@@ -60,6 +70,8 @@ const initialStaff: StaffMember[] = [
     weeklyHours: "Mon – Sat",
     services: ["Facial", "Cleanup", "Bridal Beauty", "Skin Treatment"],
     color: "from-rose-200 to-amber-100",
+    isActive: true,
+    isDemo: true,
   },
   {
     id: 4,
@@ -73,6 +85,8 @@ const initialStaff: StaffMember[] = [
     weeklyHours: "Wed – Sun",
     services: ["Spa", "Manicure", "Pedicure", "Cleanup"],
     color: "from-emerald-200 to-teal-100",
+    isActive: true,
+    isDemo: true,
   },
 ];
 
@@ -92,6 +106,45 @@ const statusStyles: Record<StaffStatus, string> = {
   "On Leave": "bg-rose-50 text-rose-700",
 };
 
+function mapStaff(record: StaffApiRecord): StaffMember {
+  return {
+    id: record.id,
+    name: record.name,
+    role: record.role,
+    speciality: record.speciality,
+    phone: record.phone,
+    rating: record.rating,
+    status: record.status as StaffStatus,
+    todayHours: record.today_hours,
+    weeklyHours: record.weekly_hours,
+    services: record.services,
+    color: record.color,
+    isActive: record.is_active !== false,
+    isDemo: false,
+  };
+}
+
+function mergeStaff(exampleStaff: StaffMember[], savedStaff: StaffApiRecord[]) {
+  const merged = [...exampleStaff];
+  const existingIds = new Set(merged.map((member) => String(member.id)));
+  const existingPhones = new Set(merged.map((member) => member.phone.trim().toLowerCase()));
+
+  for (const savedMember of savedStaff) {
+    const mappedMember = mapStaff(savedMember);
+    const hasStableId = Boolean(String(mappedMember.id).trim());
+    const duplicate = hasStableId
+      ? existingIds.has(String(mappedMember.id))
+      : existingPhones.has(mappedMember.phone.trim().toLowerCase());
+    if (!duplicate) {
+      merged.push(mappedMember);
+      existingIds.add(String(mappedMember.id));
+      existingPhones.add(mappedMember.phone.trim().toLowerCase());
+    }
+  }
+
+  return merged;
+}
+
 export default function StaffPage() {
   const [staff, setStaff] = useState<StaffMember[]>(initialStaff);
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
@@ -99,15 +152,54 @@ export default function StaffPage() {
   const [selectedStatus, setSelectedStatus] = useState<"All" | StaffStatus>(
     "All"
   );
+  const [loadError, setLoadError] = useState("");
+  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
+  const [services, setServices] = useState<ServiceApiRecord[]>([]);
+  const [editForm, setEditForm] = useState({ name: "", role: "", speciality: "", phone: "", service_ids: [] as string[], today_hours: "", weekly_hours: "", is_active: true, bookable: true, status: "Available" });
+  const [isEditLoading, setIsEditLoading] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [savingStatusId, setSavingStatusId] = useState<number | string | null>(null);
+  const [statusError, setStatusError] = useState("");
+  const [statusSuccess, setStatusSuccess] = useState("");
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadStaff() {
+      try {
+        const response = await getStaff();
+        if (isActive) {
+          setStaff(mergeStaff(initialStaff, response.staff));
+          setLoadError("");
+        }
+      } catch (error) {
+        if (isActive) {
+          setStaff(initialStaff);
+          setLoadError(error instanceof Error ? error.message : "Unable to load saved staff members.");
+        }
+      }
+    }
+
+    loadStaff();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") loadStaff();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      isActive = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   const filteredStaff = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
+    const normalize = (value: string) => value.trim().toLowerCase();
 
     return staff.filter((member) => {
       const matchesSearch =
-        member.name.toLowerCase().includes(normalizedQuery) ||
-        member.role.toLowerCase().includes(normalizedQuery) ||
-        member.speciality.toLowerCase().includes(normalizedQuery);
+        normalize(member.name).includes(normalizedQuery) ||
+        normalize(member.role).includes(normalizedQuery) ||
+        normalize(member.speciality).includes(normalizedQuery);
 
       const matchesStatus =
         selectedStatus === "All" || member.status === selectedStatus;
@@ -125,18 +217,72 @@ export default function StaffPage() {
     };
   }, [staff]);
 
-  function updateStaffStatus(id: number, status: StaffStatus) {
-    setStaff((currentStaff) =>
-      currentStaff.map((member) =>
-        member.id === id ? { ...member, status } : member
-      )
-    );
+  async function persistStaffStatus(member: StaffMember, status: StaffStatus) {
+    if (member.isDemo) {
+      setStatusError("Example staff status is not saved. Add this stylist as a real staff member to manage live availability.");
+      setStatusSuccess("");
+      return;
+    }
+    if (savingStatusId !== null) {
+      return;
+    }
 
-    setSelectedStaff((currentSelectedStaff) =>
-      currentSelectedStaff?.id === id
-        ? { ...currentSelectedStaff, status }
-        : currentSelectedStaff
-    );
+    setSavingStatusId(member.id);
+    setStatusError("");
+    setStatusSuccess("");
+    try {
+      const result = await updateStaffStatus(String(member.id), status);
+      const updated = mapStaff(result.staff);
+      setStaff((current) => current.map((item) => (item.id === member.id ? updated : item)));
+      setSelectedStaff((current) => (current?.id === member.id ? updated : current));
+      setStatusSuccess(`Status updated to ${status}.`);
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : "Unable to update staff status.");
+    } finally {
+      setSavingStatusId(null);
+    }
+  }
+
+  function addCreatedStaff(record: StaffApiRecord) {
+    setStaff((currentStaff) => mergeStaff(currentStaff, [record]));
+  }
+
+  async function openEditStaff(member: StaffMember) {
+    setEditingStaff(member);
+    setEditError("");
+    setIsEditLoading(true);
+    try {
+      const response = await getServices();
+      const activeServices = response.services.filter((service) => service.is_active !== false);
+      const serviceIds = member.services.map((value) => activeServices.find((service) => service.id === value || service.name.toLowerCase() === value.toLowerCase())?.id).filter((value): value is string => Boolean(value));
+      setServices(activeServices);
+      setEditForm({ name: member.name, role: member.role, speciality: member.speciality, phone: member.phone, service_ids: serviceIds, today_hours: member.todayHours, weekly_hours: member.weeklyHours, is_active: member.isActive, bookable: true, status: member.status });
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Unable to load active services.");
+    } finally {
+      setIsEditLoading(false);
+    }
+  }
+
+  async function saveStaff(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingStaff || !editForm.name.trim() || !editForm.role.trim() || !editForm.phone.trim()) {
+      setEditError("Name, role, and phone are required.");
+      return;
+    }
+    setIsEditLoading(true);
+    setEditError("");
+    try {
+      const result = await updateStaff(String(editingStaff.id), editForm);
+      const updated = mapStaff(result.staff);
+      setStaff((current) => current.map((member) => member.id === editingStaff.id ? updated : member));
+      setSelectedStaff((current) => current?.id === editingStaff.id ? updated : current);
+      setEditingStaff(null);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Unable to update staff member.");
+    } finally {
+      setIsEditLoading(false);
+    }
   }
 
   return (
@@ -170,9 +316,7 @@ export default function StaffPage() {
                 </p>
               </div>
 
-              <button className="rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#bf356e]">
-                + Add staff member
-              </button>
+              <CreateStaffControl onCreated={addCreatedStaff} />
             </div>
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -202,6 +346,12 @@ export default function StaffPage() {
                 </p>
               </article>
             </section>
+
+            {loadError && (
+              <p role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {loadError} Example staff members are still shown.
+              </p>
+            )}
 
             <section className="rounded-3xl border border-[#f0dce5] bg-white p-6 shadow-sm">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -252,7 +402,7 @@ export default function StaffPage() {
                       <span
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[member.status]}`}
                       >
-                        {member.status}
+                        {member.isActive ? member.status : "Inactive"}
                       </span>
                     </div>
 
@@ -278,13 +428,24 @@ export default function StaffPage() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setSelectedStaff(member)}
-                      className="mt-6 w-full rounded-full bg-[#2b1b25] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#4a303e]"
-                    >
-                      View profile &amp; schedule
-                    </button>
+                    <div className="mt-6 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedStaff(member); setStatusError(""); setStatusSuccess(""); }}
+                        className="flex-1 rounded-full bg-[#2b1b25] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#4a303e]"
+                      >
+                        View profile &amp; schedule
+                      </button>
+                      {!member.isDemo && member.isActive && (
+                        <LifecycleAction
+                          actionLabel="Deactivate staff"
+                          onConfirm={async () => {
+                            const result = await deactivateStaff(String(member.id));
+                            setStaff((current) => current.map((item) => item.id === member.id ? mapStaff(result.staff) : item));
+                          }}
+                        />
+                      )}
+                    </div>
                   </article>
                 ))}
               </div>
@@ -324,11 +485,12 @@ export default function StaffPage() {
 
                   <button
                     type="button"
-                    onClick={() => setSelectedStaff(null)}
+                    onClick={() => { setSelectedStaff(null); setStatusError(""); setStatusSuccess(""); }}
                     className="rounded-full border border-[#e9d4df] px-4 py-2 text-sm font-semibold text-[#6d5863] transition hover:bg-[#fff0f6]"
                   >
                     Close
                   </button>
+                  {!selectedStaff.isDemo && <button type="button" onClick={() => void openEditStaff(selectedStaff)} className="rounded-full bg-[#d84b87] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#bf356e]">Edit staff</button>}
                 </div>
 
                 <div className="mt-8 grid gap-6 lg:grid-cols-2">
@@ -424,21 +586,47 @@ export default function StaffPage() {
                   <h3 className="text-xl font-bold">Update today&apos;s status</h3>
 
                   <div className="mt-4 flex flex-wrap gap-3">
-                    {(["Available", "Busy", "On Leave"] as StaffStatus[]).map(
-                      (status) => (
-                        <button
-                          key={status}
-                          type="button"
-                          onClick={() => updateStaffStatus(selectedStaff.id, status)}
-                          className={`rounded-full px-5 py-3 text-sm font-semibold transition ${
-                            selectedStaff.status === status
-                              ? "bg-[#d84b87] text-white"
-                              : "border border-[#e9d4df] bg-white text-[#6d5863] hover:bg-[#fff0f6]"
-                          }`}
-                        >
-                          Mark as {status}
-                        </button>
-                      )
+                    {((["Available", "Busy", "On Leave"] as StaffStatus[]).map(
+                      (status) => {
+                        const isSaving = savingStatusId === selectedStaff.id;
+                        return (
+                          <button
+                            key={status}
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() => void persistStaffStatus(selectedStaff, status)}
+                            className={`rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                              selectedStaff.status === status
+                                ? "bg-[#d84b87] text-white"
+                                : "border border-[#e9d4df] bg-white text-[#6d5863] hover:bg-[#fff0f6]"
+                            }`}
+                          >
+                            {isSaving ? "Saving..." : `Mark as ${status}`}
+                          </button>
+                        );
+                      }
+                    ))}
+                  </div>
+
+                  {statusError && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{statusError}</p>}
+                  {statusSuccess && <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{statusSuccess}</p>}
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {editingStaff && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#2b1b25]/40 px-4 py-8">
+                        <form onSubmit={(event) => void saveStaff(event)} role="dialog" aria-modal="true" aria-labelledby="edit-staff-title" className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-[#f0dce5] bg-white p-6 shadow-xl">
+                          <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#d84b87]">Staff management</p><h2 id="edit-staff-title" className="mt-2 text-2xl font-bold">Edit {editingStaff.name}</h2></div><button type="button" disabled={isEditLoading} onClick={() => setEditingStaff(null)} className="rounded-full border border-[#e9d4df] px-3 py-2 text-sm font-semibold text-[#6d5863] disabled:opacity-60">Cancel</button></div>
+                          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                            {(["name", "role", "speciality", "phone", "weekly_hours", "today_hours"] as const).map((field) => <label key={field} className="grid gap-2 text-sm font-semibold">{field.replace("_", " ")} <span className="text-[#d84b87]">*</span><input required value={editForm[field]} onChange={(event) => setEditForm({ ...editForm, [field]: event.target.value })} className="rounded-xl border border-[#e9d4df] px-4 py-3 font-normal outline-none focus:border-[#d84b87]" /></label>)}
+                            <fieldset className="sm:col-span-2"><legend className="text-sm font-semibold">Services they can perform <span className="text-[#d84b87]">*</span></legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{services.map((service) => <label key={service.id} className="flex items-center gap-3 rounded-xl border border-[#e9d4df] px-3 py-3 text-sm font-medium"><input type="checkbox" checked={editForm.service_ids.includes(service.id)} onChange={(event) => setEditForm({ ...editForm, service_ids: event.target.checked ? [...editForm.service_ids, service.id] : editForm.service_ids.filter((id) => id !== service.id) })} />{service.name}</label>)}</div>{!isEditLoading && !services.length && <p className="mt-2 text-sm text-rose-600">No active services are available.</p>}</fieldset>
+                            <label className="flex items-center gap-3 text-sm font-semibold"><input type="checkbox" checked={editForm.is_active} onChange={(event) => setEditForm({ ...editForm, is_active: event.target.checked })} />Active</label>
+                            <label className="flex items-center gap-3 text-sm font-semibold"><input type="checkbox" checked={editForm.bookable} onChange={(event) => setEditForm({ ...editForm, bookable: event.target.checked })} />Bookable</label>
+                            <label className="grid gap-2 text-sm font-semibold">Today status<select value={editForm.status} onChange={(event) => setEditForm({ ...editForm, status: event.target.value })} className="rounded-xl border border-[#e9d4df] bg-white px-4 py-3 font-normal"><option>Available</option><option>Busy</option><option>On Leave</option></select></label>
+                          </div>
+                          {editError && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{editError}</p>}
+                          <button type="submit" disabled={isEditLoading} className="mt-6 w-full rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{isEditLoading ? "Saving..." : "Save staff changes"}</button>
+                        </form>
+                      </div>
                     )}
                   </div>
                 </section>

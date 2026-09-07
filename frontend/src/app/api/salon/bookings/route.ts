@@ -8,6 +8,15 @@ type StatusUpdateBody = {
   status?: string;
 };
 
+type ActionBody = {
+  cancellation_reason?: string;
+  appointment_date?: string;
+  appointment_time?: string;
+  staff_id?: string;
+  service_id?: string;
+  reschedule_reason?: string;
+};
+
 async function forwardToBackend(
   path: string,
   options: RequestInit = {},
@@ -35,11 +44,26 @@ async function forwardToBackend(
     });
     const responseText = await response.text();
 
-    return new NextResponse(responseText || null, {
+    let responseBody: unknown;
+    try {
+      responseBody = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseBody = {
+        detail: response.ok
+          ? "The booking service returned an unexpected response."
+          : "The booking service returned an unexpected server error.",
+      };
+    }
+    if (!responseBody) {
+      responseBody = {
+        detail: response.ok
+          ? "The booking service returned an empty response."
+          : "The booking service returned an unexpected server error.",
+      };
+    }
+
+    return NextResponse.json(responseBody, {
       status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("Content-Type") ?? "application/json",
-      },
     });
   } catch {
     return NextResponse.json(
@@ -55,6 +79,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ detail: "Owner login required." }, { status: 401 });
   }
 
+  const bookingId = request.nextUrl.searchParams.get("booking_id");
+  if (bookingId) {
+    return forwardToBackend(`/bookings/${encodeURIComponent(bookingId)}`, {}, ownerToken);
+  }
+
   const salonId = request.nextUrl.searchParams.get("salon_id");
 
   if (salonId !== SALON_ID) {
@@ -62,6 +91,38 @@ export async function GET(request: NextRequest) {
   }
 
   return forwardToBackend(`/bookings/?salon_id=${encodeURIComponent(SALON_ID)}`, {}, ownerToken);
+}
+
+export async function POST(request: NextRequest) {
+  const ownerToken = request.cookies.get("owner_session")?.value;
+  if (!ownerToken) return NextResponse.json({ detail: "Owner login required." }, { status: 401 });
+
+  const bookingId = request.nextUrl.searchParams.get("booking_id");
+  const action = request.nextUrl.searchParams.get("action");
+  if (!bookingId || !action || !["confirm", "cancel", "reschedule", "complete", "service-mapping"].includes(action)) {
+    return NextResponse.json({ detail: "booking_id and a valid action are required." }, { status: 400 });
+  }
+
+  let body: ActionBody = {};
+  if (action === "cancel" || action === "reschedule" || action === "service-mapping") {
+    try {
+      body = (await request.json()) as ActionBody;
+    } catch {
+      return NextResponse.json({ detail: "Invalid request body." }, { status: 422 });
+    }
+  }
+
+  const actionPath = `/bookings/${encodeURIComponent(bookingId)}/${action}`;
+  return forwardToBackend(actionPath, {
+    method: "POST",
+    body: action === "cancel"
+      ? JSON.stringify({ cancellation_reason: body.cancellation_reason })
+      : action === "reschedule"
+        ? JSON.stringify({ staff_id: body.staff_id, appointment_date: body.appointment_date, appointment_time: body.appointment_time, reschedule_reason: body.reschedule_reason })
+        : action === "service-mapping"
+          ? JSON.stringify({ service_id: body.service_id })
+        : undefined,
+  }, ownerToken);
 }
 
 export async function PATCH(request: NextRequest) {

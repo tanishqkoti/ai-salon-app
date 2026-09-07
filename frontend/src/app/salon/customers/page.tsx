@@ -3,12 +3,15 @@
 import Link from "next/link";
 import SalonDashboardHeader from "@/components/layout/SalonDashboardHeader";
 import SalonSidebar from "@/components/layout/SalonSidebar";
-import { useMemo, useState } from "react";
+import CreateCustomerControl from "@/components/dashboard/CreateCustomerControl";
+import LifecycleAction from "@/components/dashboard/LifecycleAction";
+import { archiveCustomer, getCustomers, type CustomerApiRecord } from "@/lib/api/customers";
+import { useEffect, useMemo, useState } from "react";
 
 type CustomerStatus = "VIP" | "Regular" | "New";
 
 type Customer = {
-  id: number;
+  id: number | string;
   name: string;
   email: string;
   phone: string;
@@ -19,90 +22,8 @@ type Customer = {
   lastVisit: string;
   status: CustomerStatus;
   serviceHistory: string[];
+  isActive: boolean;
 };
-
-const initialCustomers: Customer[] = [
-  {
-    id: 1,
-    name: "Aarav Patil",
-    email: "aarav@example.com",
-    phone: "+91 98765 43210",
-    visits: 8,
-    totalSpent: 4950,
-    loyaltyPoints: 495,
-    preferredStylist: "Rahul",
-    lastVisit: "28 Aug 2026",
-    status: "VIP",
-    serviceHistory: [
-      "Men’s Haircut — 28 Aug 2026",
-      "Beard Grooming — 10 Aug 2026",
-      "Men’s Haircut — 12 Jul 2026",
-    ],
-  },
-  {
-    id: 2,
-    name: "Meera Kulkarni",
-    email: "meera@example.com",
-    phone: "+91 98765 43211",
-    visits: 5,
-    totalSpent: 6280,
-    loyaltyPoints: 628,
-    preferredStylist: "Ananya",
-    lastVisit: "25 Aug 2026",
-    status: "VIP",
-    serviceHistory: [
-      "Hair Spa — 25 Aug 2026",
-      "Women’s Haircut — 03 Aug 2026",
-      "Hair Colour — 11 Jul 2026",
-    ],
-  },
-  {
-    id: 3,
-    name: "Ishita Desai",
-    email: "ishita@example.com",
-    phone: "+91 98765 43212",
-    visits: 3,
-    totalSpent: 3597,
-    loyaltyPoints: 359,
-    preferredStylist: "Priya",
-    lastVisit: "20 Aug 2026",
-    status: "Regular",
-    serviceHistory: [
-      "Facial — 20 Aug 2026",
-      "Cleanup — 28 Jul 2026",
-      "Facial — 03 Jul 2026",
-    ],
-  },
-  {
-    id: 4,
-    name: "Rohan Shetty",
-    email: "rohan@example.com",
-    phone: "+91 98765 43213",
-    visits: 2,
-    totalSpent: 598,
-    loyaltyPoints: 59,
-    preferredStylist: "Rahul",
-    lastVisit: "30 Aug 2026",
-    status: "Regular",
-    serviceHistory: [
-      "Men’s Haircut — 30 Aug 2026",
-      "Men’s Haircut — 15 Jul 2026",
-    ],
-  },
-  {
-    id: 5,
-    name: "Nisha Jain",
-    email: "nisha@example.com",
-    phone: "+91 98765 43214",
-    visits: 1,
-    totalSpent: 499,
-    loyaltyPoints: 49,
-    preferredStylist: "Ananya",
-    lastVisit: "19 Aug 2026",
-    status: "New",
-    serviceHistory: ["Women’s Haircut — 19 Aug 2026"],
-  },
-];
 
 const statusStyles: Record<CustomerStatus, string> = {
   VIP: "bg-purple-100 text-purple-700",
@@ -110,22 +31,65 @@ const statusStyles: Record<CustomerStatus, string> = {
   New: "bg-emerald-50 text-emerald-700",
 };
 
+function mapCustomer(record: CustomerApiRecord): Customer {
+  return {
+    id: record.id,
+    name: record.name,
+    email: record.email,
+    phone: record.phone,
+    visits: record.visits,
+    totalSpent: record.total_spent,
+    loyaltyPoints: record.loyalty_points,
+    preferredStylist: record.preferred_stylist,
+    lastVisit: record.last_visit || "No visits yet",
+    status: record.status as CustomerStatus,
+    serviceHistory: record.service_history,
+    isActive: record.is_active !== false,
+  };
+}
+
 export default function CustomersPage() {
-  const [customers] = useState<Customer[]>(initialCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<"All" | CustomerStatus>(
     "All"
   );
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
 
+  useEffect(() => {
+    async function loadCustomers() {
+      setIsLoading(true);
+      setError("");
+
+      try {
+        const response = await getCustomers();
+        setCustomers(response.customers.map(mapCustomer));
+      } catch (loadError) {
+        setCustomers([]);
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Unable to load customers."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadCustomers();
+  }, []);
+
   const filteredCustomers = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
+    const normalize = (value: string) => value.trim().toLowerCase();
 
     return customers.filter((customer) => {
       const matchesSearch =
-        customer.name.toLowerCase().includes(normalizedQuery) ||
-        customer.email.toLowerCase().includes(normalizedQuery) ||
-        customer.phone.includes(normalizedQuery);
+        normalize(customer.name).includes(normalizedQuery) ||
+        normalize(customer.email).includes(normalizedQuery) ||
+        normalize(customer.phone).includes(normalizedQuery);
 
       const matchesStatus =
         selectedStatus === "All" || customer.status === selectedStatus;
@@ -146,6 +110,10 @@ export default function CustomersPage() {
       ),
     };
   }, [customers]);
+
+  function addCreatedCustomer(record: CustomerApiRecord) {
+    setCustomers((currentCustomers) => [mapCustomer(record), ...currentCustomers]);
+  }
 
   return (
     <>
@@ -178,9 +146,7 @@ export default function CustomersPage() {
                 </p>
               </div>
 
-              <button className="rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#bf356e]">
-                + Add customer
-              </button>
+              <CreateCustomerControl onCreated={addCreatedCustomer} />
             </div>
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -255,6 +221,15 @@ export default function CustomersPage() {
                 </div>
               </div>
 
+              {error && (
+                <div role="alert" className="border-b border-rose-200 bg-rose-50 px-6 py-4 text-sm text-rose-700">
+                  {error}
+                </div>
+              )}
+
+              {isLoading ? (
+                <div className="px-6 py-10 text-sm text-[#6d5863]">Loading customers...</div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[920px] text-left">
                   <thead className="bg-[#fff9fb] text-sm text-[#6d5863]">
@@ -306,26 +281,38 @@ export default function CustomersPage() {
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[customer.status]}`}
                           >
-                            {customer.status}
+                            {customer.isActive ? customer.status : "Archived"}
                           </span>
                         </td>
 
                         <td className="px-6 py-5">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedCustomer(customer)}
-                            className="rounded-lg bg-[#2b1b25] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#4a303e]"
-                          >
-                            View profile
-                          </button>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCustomer(customer)}
+                              className="rounded-lg bg-[#2b1b25] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#4a303e]"
+                            >
+                              View profile
+                            </button>
+                            {customer.isActive && (
+                              <LifecycleAction
+                                actionLabel="Archive customer"
+                                onConfirm={async () => {
+                                  const result = await archiveCustomer(String(customer.id));
+                                  setCustomers((current) => current.map((item) => item.id === customer.id ? mapCustomer(result.customer) : item));
+                                }}
+                              />
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              )}
 
-              {filteredCustomers.length === 0 && (
+              {!isLoading && !error && filteredCustomers.length === 0 && (
                 <div className="p-10 text-center">
                   <p className="font-semibold">No customers found.</p>
                   <p className="mt-2 text-sm text-[#6d5863]">

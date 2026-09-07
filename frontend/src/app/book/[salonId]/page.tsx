@@ -5,9 +5,12 @@ import CustomerNavbar from "@/components/layout/CustomerNavbar";
 import Footer from "@/components/layout/Footer";
 import {
   createBooking,
+  getEligibleStylists,
   getSalonAvailability,
   getStylistAvailability,
 } from "@/lib/api/bookings";
+import { getPublicServices } from "@/lib/api/services";
+import { slugifyServiceName } from "@/lib/slug";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -45,30 +48,6 @@ const services = [
     duration: "60 min",
     price: 1199,
     category: "Beauty",
-  },
-];
-
-const stylists = [
-  {
-    id: "ananya",
-    name: "Ananya",
-    role: "Hair Stylist",
-    speciality: "Haircuts, styling & colour",
-    rating: "4.9",
-  },
-  {
-    id: "rahul",
-    name: "Rahul",
-    role: "Men’s Grooming Expert",
-    speciality: "Haircuts, beard & grooming",
-    rating: "4.8",
-  },
-  {
-    id: "priya",
-    name: "Priya",
-    role: "Beauty & Skin Specialist",
-    speciality: "Facials, beauty & skincare",
-    rating: "4.9",
   },
 ];
 
@@ -119,6 +98,11 @@ export default function BookingPage() {
   const [createdBookingId, setCreatedBookingId] = useState("");
   const [anyStylistMode, setAnyStylistMode] = useState(false);
   const [availabilityRefresh, setAvailabilityRefresh] = useState(0);
+  const [stylists, setStylists] = useState<Array<{ id: string; name: string }>>([]);
+  const [isStylistsLoading, setIsStylistsLoading] = useState(false);
+  const [resolvedServiceId, setResolvedServiceId] = useState("");
+  const [serviceResolutionError, setServiceResolutionError] = useState("");
+  const [isResolvingService, setIsResolvingService] = useState(false);
 
   const selectedService = services.find(
     (service) => service.id === selectedServiceId
@@ -136,8 +120,60 @@ export default function BookingPage() {
     ? Number.parseInt(selectedService.duration, 10)
     : 0;
 
+  // Resolve the display slug to the canonical Firestore service document ID once per selection.
   useEffect(() => {
-    if (!selectedService || !selectedDate || !selectedDuration) {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return undefined;
+      if (!selectedServiceId) {
+        setResolvedServiceId("");
+        setServiceResolutionError("");
+        return undefined;
+      }
+      setIsResolvingService(true);
+      setServiceResolutionError("");
+      setResolvedServiceId("");
+      return getPublicServices(salonId)
+        .then((activeServices) => {
+          if (cancelled) return;
+          const matches = activeServices.filter(
+            (service) => service.is_active !== false && slugifyServiceName(service.name) === selectedServiceId
+          );
+          if (matches.length !== 1) {
+            setServiceResolutionError("This service is currently unavailable at this salon. Please choose another service.");
+            return;
+          }
+          setResolvedServiceId(matches[0].id);
+        })
+        .catch(() => {
+          if (!cancelled) setServiceResolutionError("This service is currently unavailable at this salon. Please choose another service.");
+        })
+        .finally(() => {
+          if (!cancelled) setIsResolvingService(false);
+        });
+    });
+    return () => { cancelled = true; };
+  }, [salonId, selectedServiceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return undefined;
+      if (!resolvedServiceId) {
+        setStylists([]);
+        return undefined;
+      }
+      setIsStylistsLoading(true);
+      return getEligibleStylists(salonId, resolvedServiceId)
+        .then((eligibleStylists) => { if (!cancelled) setStylists(eligibleStylists); })
+        .catch(() => { if (!cancelled) setStylists([]); })
+        .finally(() => { if (!cancelled) setIsStylistsLoading(false); });
+    });
+    return () => { cancelled = true; };
+  }, [salonId, resolvedServiceId]);
+
+  useEffect(() => {
+    if (!selectedService || !selectedDate || !selectedDuration || !resolvedServiceId) {
       return;
     }
 
@@ -151,12 +187,14 @@ export default function BookingPage() {
               salon_id: salonId,
               date: selectedDate.id,
               duration_minutes: selectedDuration,
+              service_id: resolvedServiceId,
             })
           : selectedStylistId
             ? await getStylistAvailability(selectedStylistId, {
                 salon_id: salonId,
                 date: selectedDate.id,
                 duration_minutes: selectedDuration,
+                service_id: resolvedServiceId,
               })
             : { salon_id: salonId, date: selectedDate.id, duration_minutes: selectedDuration, available_slots: [] };
 
@@ -174,7 +212,7 @@ export default function BookingPage() {
     };
 
     void loadAvailability();
-  }, [anyStylistMode, availabilityRefresh, selectedDate, selectedDuration, selectedService, selectedStylistId, salonId]);
+  }, [anyStylistMode, availabilityRefresh, selectedDate, selectedDuration, selectedService, selectedStylistId, salonId, resolvedServiceId]);
 
   const selectedEffectiveStylist = anyStylistMode ? stylists[0] : selectedStylist;
 
@@ -244,6 +282,11 @@ export default function BookingPage() {
       return;
     }
 
+    if (!resolvedServiceId) {
+      setSubmitError("This service is currently unavailable at this salon. Please choose another service.");
+      return;
+    }
+
     setSubmitError("");
 
     try {
@@ -254,7 +297,7 @@ export default function BookingPage() {
         customer_email: customerEmail.trim(),
         customer_phone: customerPhone.trim() || undefined,
         notes: customerNotes.trim() || undefined,
-        service_id: selectedService.id,
+        service_id: resolvedServiceId,
         service_name: selectedService.name,
         stylist_id: effectiveSelectedStylist.id,
         stylist_name: effectiveSelectedStylist.name,
@@ -470,8 +513,13 @@ export default function BookingPage() {
                   </button>
                 </div>
 
+                {serviceResolutionError && (
+                  <p role="alert" className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{serviceResolutionError}</p>
+                )}
+                {!serviceResolutionError && (isResolvingService || isStylistsLoading) && <p className="mt-6 text-sm text-[#6d5863]">Loading eligible stylists...</p>}
+                {!serviceResolutionError && !isResolvingService && !isStylistsLoading && stylists.length === 0 && <p className="mt-6 text-sm text-[#6d5863]">No active stylists are eligible for this service.</p>}
                 <div className="mt-6 grid gap-4 md:grid-cols-3">
-                  {stylists.map((stylist) => (
+                  {!serviceResolutionError && !isResolvingService && !isStylistsLoading && stylists.map((stylist) => (
                     <button
                       key={stylist.id}
                       type="button"
@@ -488,11 +536,7 @@ export default function BookingPage() {
                     >
                       <div className="h-14 w-14 rounded-full bg-gradient-to-br from-pink-200 to-violet-200" />
                       <h3 className="mt-4 text-lg font-bold">{stylist.name}</h3>
-                      <p className="mt-1 text-[#d84b87]">{stylist.role}</p>
-                      <p className="mt-2 text-sm text-[#6d5863]">
-                        {stylist.speciality}
-                      </p>
-                      <p className="mt-3 text-sm font-semibold">★ {stylist.rating}</p>
+                      <p className="mt-2 text-sm text-[#6d5863]">Eligible for this service</p>
                     </button>
                   ))}
                 </div>

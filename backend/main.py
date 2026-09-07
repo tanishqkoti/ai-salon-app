@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes import (
     bookings,
+    services,
     staff,
     customers,
     loyalty,
@@ -41,6 +42,7 @@ app.add_middleware(
 )
 
 app.include_router(bookings.router, prefix="/bookings")
+app.include_router(services.router, prefix="/services")
 app.include_router(staff.router, prefix="/staff")
 app.include_router(customers.router, prefix="/customers")
 app.include_router(loyalty.router, prefix="/loyalty")

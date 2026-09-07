@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import SalonDashboardHeader from "@/components/layout/SalonDashboardHeader";
 import SalonSidebar from "@/components/layout/SalonSidebar";
 import {
@@ -18,6 +19,7 @@ const statusStyles: Record<BookingStatus, string> = {
   Completed: "bg-emerald-50 text-emerald-700",
   Cancelled: "bg-rose-50 text-rose-700",
   "No-show": "bg-slate-100 text-slate-700",
+  Rescheduled: "bg-violet-50 text-violet-700",
 };
 
 export default function SalonDashboardPage() {
@@ -114,9 +116,12 @@ export default function SalonDashboardPage() {
                 </p>
               </div>
 
-              <button className="rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#bf356e]">
+              <Link
+                href="/book/aura-studio"
+                className="rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#bf356e]"
+              >
                 + Create booking
-              </button>
+              </Link>
             </div>
 
             {error && (
@@ -352,9 +357,12 @@ export default function SalonDashboardPage() {
                   service history, and personalised offers will live here.
                 </p>
 
-                <button className="mt-6 rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#ef5d9d]">
+                <Link
+                  href="/salon/loyalty"
+                  className="mt-6 inline-block rounded-full bg-[#d84b87] px-5 py-3 font-semibold text-white transition hover:bg-[#ef5d9d]"
+                >
                   View growth tools
-                </button>
+                </Link>
               </article>
             </section>
           </section>
