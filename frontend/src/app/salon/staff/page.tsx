@@ -316,7 +316,12 @@ export default function StaffPage() {
                 </p>
               </div>
 
-              <CreateStaffControl onCreated={addCreatedStaff} />
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <CreateStaffControl onCreated={addCreatedStaff} />
+                <p className="max-w-xs text-sm text-[#6d5863] sm:text-right">
+                  Create a real staff profile to manage saved details and availability.
+                </p>
+              </div>
             </div>
 
             <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -538,6 +543,24 @@ export default function StaffPage() {
                 </div>
 
                 <section className="mt-8">
+                  <div
+                    role="note"
+                    className={`mb-5 rounded-xl border px-4 py-3 ${
+                      selectedStaff.isDemo
+                        ? "border-amber-200 bg-amber-50 text-amber-900"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    }`}
+                  >
+                    <p className="text-sm font-semibold">
+                      {selectedStaff.isDemo ? "Sample staff member" : "Real staff member"}
+                    </p>
+                    <p className="mt-1 text-sm leading-5">
+                      {selectedStaff.isDemo
+                        ? "Availability changes are for preview only and will not be saved. Add a real staff member to manage live availability."
+                        : "Availability updates are saved and available for salon management."}
+                    </p>
+                  </div>
+
                   <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                     <div>
                       <h3 className="text-xl font-bold">Weekly availability</h3>
